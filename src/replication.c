@@ -168,7 +168,7 @@ void feedReplicationBacklogWithObject(robj *o) {
     }
     feedReplicationBacklog(p,len);
 }
-
+//主给从广播同步命令
 void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     listNode *ln;
     listIter li;
@@ -200,9 +200,10 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
         }
 
         /* Add the SELECT command into the backlog. */
+        //将select命令添加到复制缓冲区
         if (server.repl_backlog) feedReplicationBacklogWithObject(selectcmd);
 
-        /* Send it to slaves. */
+        /* Send it to slaves. *///向所有从发送
         listRewind(slaves,&li);
         while((ln = listNext(&li))) {
             redisClient *slave = ln->value;
@@ -216,7 +217,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     server.slaveseldb = dictid;
 
     /* Write the command to the replication backlog if any. */
-    if (server.repl_backlog) {
+    if (server.repl_backlog) {//将命令添加到缓冲区
         char aux[REDIS_LONGSTR_SIZE+3];
 
         /* Add the multi bulk reply length. */
@@ -242,7 +243,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
         }
     }
 
-    /* Write the command to every slave. */
+    /* Write the command to every slave. *///将命令发送给从服务器
     listRewind(server.slaves,&li);
     while((ln = listNext(&li))) {
         redisClient *slave = ln->value;
@@ -412,8 +413,8 @@ int replicationSetupSlaveForFullResync(redisClient *slave, PORT_LONGLONG offset)
  *
  * On success return REDIS_OK, otherwise REDIS_ERR is returned and we proceed
  * with the usual full resync. */
-int masterTryPartialResynchronization(redisClient *c) {
-    PORT_LONGLONG psync_offset, psync_len;
+int masterTryPartialResynchronization(redisClient *c,long long psync_offset) {
+    PORT_LONGLONG  psync_len;
     char *master_runid = c->argv[1]->ptr;
     char buf[128];
     int buflen;
@@ -421,12 +422,16 @@ int masterTryPartialResynchronization(redisClient *c) {
     /* Is the runid of this master the same advertised by the wannabe slave
      * via PSYNC? If runid changed this master is a different instance and
      * there is no way to continue. */
-    if (strcasecmp(master_runid, server.runid)) {
+    //运行id是否匹配,原master的offset是否在合法区间
+    //c是master，因此直接使用runid
+    if (strcasecmp(master_runid, server.runid)&&
+        (strcasecmp(master_runid, server.last_runid) ||
+            psync_offset > server.last_offset)) {
         /* Run id "?" is used by slaves that want to force a full resync. */
         if (master_runid[0] != '?') {
             redisLog(REDIS_NOTICE,"Partial resynchronization not accepted: "
-                "Runid mismatch (Client asked for runid '%s', my runid is '%s')",
-                master_runid, server.runid);
+                "Runid mismatch (Client asked for runid '%s', my runid is '%s',last runid is '%s')",
+                master_runid, server.runid,server.last_runid);
         } else {
             redisLog(REDIS_NOTICE,"Full resync requested by slave %s",
                 replicationGetSlaveName(c));
@@ -434,16 +439,14 @@ int masterTryPartialResynchronization(redisClient *c) {
         goto need_full_resync;
     }
 
-    /* We still have the data our slave is asking for? */
-    if (getLongLongFromObjectOrReply(c,c->argv[2],&psync_offset,NULL) !=
-       REDIS_OK) goto need_full_resync;
+    //复制偏移量不包含在复制缓冲区
     if (!server.repl_backlog ||
         psync_offset < server.repl_backlog_off ||
         psync_offset > (server.repl_backlog_off + server.repl_backlog_histlen))
     {
         redisLog(REDIS_NOTICE,
             "Unable to partial resync with slave %s for lack of backlog (Slave request was: %lld).", replicationGetSlaveName(c), psync_offset);
-        if (psync_offset > server.master_repl_offset) {
+        if (psync_offset > server.master_repl_offset) {//复制偏移量不合法
             redisLog(REDIS_WARNING,
                 "Warning: slave %s tried to PSYNC with an offset that is greater than the master replication offset.", replicationGetSlaveName(c));
         }
@@ -458,15 +461,17 @@ int masterTryPartialResynchronization(redisClient *c) {
     c->replstate = REDIS_REPL_ONLINE;
     c->repl_ack_time = server.unixtime;
     c->repl_put_online_on_ack = 0;
+    //添加到从服务器链表
     listAddNodeTail(server.slaves,c);
     /* We can't use the connection buffers since they are used to accumulate
      * new commands at this stage. But we are sure the socket send buffer is
      * empty so this write will never fail actually. */
-    buflen = snprintf(buf,sizeof(buf),"+CONTINUE\r\n");
+    buflen = snprintf(buf,sizeof(buf),"+CONTINUE %s\r\n",server.runid);
     if (write(c->fd,buf,buflen) != buflen) {
         freeClientAsync(c);
         return REDIS_OK;
     }
+    //向客户端发送复制缓冲区的命令请求
     psync_len = addReplyReplicationBacklog(c,psync_offset);
     redisLog(REDIS_NOTICE,
         "Partial resynchronization request from %s accepted. Sending %lld bytes of backlog starting from offset %lld.",
@@ -476,6 +481,7 @@ int masterTryPartialResynchronization(redisClient *c) {
      * to -1 to force the master to emit SELECT, since the slave already
      * has this state from the previous connection with the master. */
 
+    //更新有效从服务器数量
     refreshGoodSlavesCount();
     return REDIS_OK; /* The caller can return, no full resync needed. */
 
@@ -515,9 +521,9 @@ int startBgsaveForReplication(int mincapa) {
         socket_target ? "slaves sockets" : "disk");
 
     if (socket_target)
-        retval = rdbSaveToSlavesSockets();
+        retval = rdbSaveToSlavesSockets();//直接发给从
     else
-        retval = rdbSaveBackground(server.rdb_filename);
+        retval = rdbSaveBackground(server.rdb_filename);//持久化到本地后再发给从
 
     /* If we failed to BGSAVE, remove the slaves waiting for a full
      * resynchorinization from the list of salves, inform them with
@@ -593,7 +599,14 @@ void syncCommand(redisClient *c) {
      * So the slave knows the new runid and offset to try a PSYNC later
      * if the connection with the master is lost. */
     if (!strcasecmp(c->argv[0]->ptr,"psync")) {
-        if (masterTryPartialResynchronization(c) == REDIS_OK) {
+        long long psync_offset;
+        if (getLongLongFromObjectOrReply(c, c->argv[2], &psync_offset, NULL) != REDIS_OK) {
+            redisLog(REDIS_WARNING, "Replica %s asks for synchronization but with a wrong offset",
+                replicationGetSlaveName(c));
+            return;
+        }
+
+        if (masterTryPartialResynchronization(c,psync_offset) == REDIS_OK) {
             server.stat_sync_partial_ok++;
             return; /* No full resync needed, return. */
         } else {
@@ -679,8 +692,10 @@ void syncCommand(redisClient *c) {
         }
     }
 
-    if (listLength(server.slaves) == 1 && server.repl_backlog == NULL)
+    if (listLength(server.slaves) == 1 && server.repl_backlog == NULL) {
+        clearReplicationLastId();
         createReplicationBacklog();
+    }
     return;
 }
 
@@ -1395,7 +1410,7 @@ int slaveTryPartialResynchronization(int fd, int read_reply) {
     sds reply;
 
     /* Writing half */
-    if (!read_reply) {
+    if (!read_reply) {//获取偏移量和运行id，并向主发送psync命令请求
         /* Initially set repl_master_initial_offset to -1 to mark the current
          * master run_id and offset as not valid. Later if we'll be able to do
          * a FULL resync using the PSYNC command we'll set the offset at the
@@ -1424,7 +1439,7 @@ int slaveTryPartialResynchronization(int fd, int read_reply) {
         WIN32_ONLY(WSIOCP_QueueNextRead(fd);)
         return PSYNC_WAIT_REPLY;
     }
-
+    //解析回复，判断是完整重同步还是部分重同步
     /* Reading half */
     reply = sendSynchronousCommand(SYNC_CMD_READ,fd,NULL);
     if (sdslen(reply) == 0) {
@@ -1474,8 +1489,38 @@ int slaveTryPartialResynchronization(int fd, int read_reply) {
         /* Partial resync was accepted, set the replication state accordingly */
         redisLog(REDIS_NOTICE,
             "Successful partial resynchronization with master.");
+        /* Check the new replication ID advertised by the master. If it
+         * changed, we need to set the new ID as primary ID, and set
+         * secondary ID as the old master ID up to the current offset, so
+         * that our sub-slaves will be able to PSYNC with us after a
+         * disconnection. */
+        char* start = reply + 10;
+        char* end = reply + 9;
+        while (end[0] != '\r' && end[0] != '\n' && end[0] != '\0') end++;
+        if (end - start == REDIS_RUN_ID_SIZE) {
+            char new[REDIS_RUN_ID_SIZE + 1];
+            memcpy(new, start, REDIS_RUN_ID_SIZE);
+            new[REDIS_RUN_ID_SIZE] = '\0';
+            //runid发生了改变
+            if (strcmp(new, server.cached_master->id)) {
+                redisLog(REDIS_NOTICE, "Master replication ID changed to %s", new);
+                //更新last master信息
+                memcpy(server.last_runid, server.cached_master->id,
+                    sizeof(server.last_runid));
+                server.last_offset = server.master_repl_offset + 1;
+
+                //更新runid
+                memcpy(server.runid, new, sizeof(server.runid));
+                memcpy(server.cached_master->id, new, sizeof(server.runid));
+
+                /* Disconnect all the sub-slaves: they need to be notified. */
+                disconnectSlaves();
+            }
+        }
+
         sdsfree(reply);
         replicationResurrectCachedMaster(fd);
+        if (server.repl_backlog == NULL) createReplicationBacklog();
         return PSYNC_CONTINUE;
     }
 
@@ -1667,7 +1712,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
     /* Note: if PSYNC does not return WAIT_REPLY, it will take care of
      * uninstalling the read handler from the file descriptor. */
 
-    if (psync_result == PSYNC_CONTINUE) {
+    if (psync_result == PSYNC_CONTINUE) {//部分重同步
         redisLog(REDIS_NOTICE, "MASTER <-> SLAVE sync: Master accepted a Partial Resynchronization.");
         return;
     }
@@ -1711,6 +1756,7 @@ void syncWithMaster(aeEventLoop *el, int fd, void *privdata, int mask) {
     }
 
     /* Setup the non blocking download of the bulk file. */
+    //创建文件，并处理by readSyncBulkPayload
     if (aeCreateFileEvent(server.el,fd, AE_READABLE,readSyncBulkPayload,NULL)
             == AE_ERR)
     {
@@ -1835,6 +1881,7 @@ void replicationUnsetMaster(void) {
     }
     replicationDiscardCachedMaster();
     cancelReplicationHandshake();
+    shiftReplicationId();//slave -> master,need shift runid
     server.repl_state = REDIS_REPL_NONE;
 }
 
@@ -2319,6 +2366,32 @@ PORT_LONGLONG replicationGetSlaveOffset(void) {
     return offset;
 }
 
+void clearReplicationLastId(void) {
+    memset(server.last_id, '0', sizeof(server.runid));
+    server.last_id[REDIS_RUN_ID_SIZE] = '\0';
+    server.last_offset = -1;
+}
+
+uint64_t getMasterRunId(void) {
+    if (server.master)
+       return server.master->id;
+    else if (server.cached_master)
+       return server.cached_master->id;
+    return 0;
+}
+
+//slave to master
+//切换角色时的修改
+void shiftReplicationId(void) {
+    uint64_t t_id = getMasterRunId();
+    memcpy(server.last_id, t_id, sizeof(t_id));
+    /* 从机将要求它尚未收到的第一个字节，所以我们需要在偏移量上加一*/
+    server.last_offset = server.master_repl_offset + 1;
+    redisLog(REDIS_WARNING,"Setting last replication ID to %s,"
+        "valid up to offset : % lld.New replication ID is % s",
+        server.last_runid, server.last_offset, t_id);
+}
+
 /* --------------------------- REPLICATION CRON  ---------------------------- */
 
 /* Replication cron function, called 1 time per second. */
@@ -2436,6 +2509,7 @@ void replicationCron(void) {
         time_t idle = server.unixtime - server.repl_no_slaves_since;
 
         if (idle > server.repl_backlog_time_limit) {
+            clearReplicationLastId();
             freeReplicationBacklog();
             redisLog(REDIS_NOTICE,
                 "Replication backlog freed after %d seconds "

@@ -1440,11 +1440,13 @@ void createSharedObjects(void) {
 
 void initServerConfig(void) {
     int j;
+ 
+    getRandomHexChars(server.runid, REDIS_RUN_ID_SIZE);
+    server.runid[REDIS_RUN_ID_SIZE] = '\0';
+    clearReplicationLastId();
 
-    getRandomHexChars(server.runid,REDIS_RUN_ID_SIZE);
     server.configfile = NULL;
     server.hz = REDIS_DEFAULT_HZ;
-    server.runid[REDIS_RUN_ID_SIZE] = '\0';
     server.arch_bits = (sizeof(PORT_LONG) == 8) ? 64 : 32;
     server.port = REDIS_SERVERPORT;
     server.tcp_backlog = REDIS_TCP_BACKLOG;
@@ -2712,6 +2714,7 @@ sds genRedisInfoString(char *section) {
             POSIX_ONLY("gcc_version:%d.%d.%d\r\n")
             "process_id:%ld\r\n"
             "run_id:%s\r\n"
+            "last_id:%s\r\n
             "tcp_port:%d\r\n"
             "uptime_in_seconds:%lld\r\n"                                        WIN_PORT_FIX /* %jd -> %lld */
             "uptime_in_days:%lld\r\n"                                           WIN_PORT_FIX /* %jd -> %lld */
@@ -2739,6 +2742,7 @@ sds genRedisInfoString(char *section) {
 #endif
             (PORT_LONG) getpid(),
             server.runid,
+            server.last_id,
             server.port,
             (intmax_t)uptime,
             (intmax_t)(uptime/(3600*24)),
