@@ -1202,6 +1202,8 @@ void unblockClientWaitingReplicas(redisClient *c);
 int replicationCountAcksByOffset(PORT_LONGLONG offset);
 void replicationSendNewlineToMaster(void);
 PORT_LONGLONG replicationGetSlaveOffset(void);
+void clearReplicationLastId(void);
+void shiftReplicationId(void);
 char *replicationGetSlaveName(redisClient *c);
 PORT_LONGLONG getPsyncInitialOffset(void);
 int replicationSetupSlaveForFullResync(redisClient *slave, PORT_LONGLONG offset);
