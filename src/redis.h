@@ -824,6 +824,8 @@ struct redisServer {
     POSIX_ONLY(int syslog_facility;)            /* Syslog facility */
     /* Replication (master) */
     int slaveseldb;                 /* Last SELECTed DB in replication output */
+    char last_id[REDIS_RUN_ID_SIZE + 1]; /* runid from last master*/
+    long long last_offset;      /* offset from last master */
     PORT_LONGLONG master_repl_offset;   /* Global replication offset */
     int repl_ping_slave_period;     /* Master pings the slave every N seconds */
     char *repl_backlog;             /* Replication backlog for partial syncs */
