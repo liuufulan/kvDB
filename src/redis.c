@@ -2714,7 +2714,7 @@ sds genRedisInfoString(char *section) {
             POSIX_ONLY("gcc_version:%d.%d.%d\r\n")
             "process_id:%ld\r\n"
             "run_id:%s\r\n"
-            "last_id:%s\r\n
+            "last_id:%s\r\n"
             "tcp_port:%d\r\n"
             "uptime_in_seconds:%lld\r\n"                                        WIN_PORT_FIX /* %jd -> %lld */
             "uptime_in_days:%lld\r\n"                                           WIN_PORT_FIX /* %jd -> %lld */

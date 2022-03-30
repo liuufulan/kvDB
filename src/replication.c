@@ -425,13 +425,13 @@ int masterTryPartialResynchronization(redisClient *c,long long psync_offset) {
     //运行id是否匹配,原master的offset是否在合法区间
     //c是master，因此直接使用runid
     if (strcasecmp(master_runid, server.runid)&&
-        (strcasecmp(master_runid, server.last_runid) ||
+        (strcasecmp(master_runid, server.last_id) ||
             psync_offset > server.last_offset)) {
         /* Run id "?" is used by slaves that want to force a full resync. */
         if (master_runid[0] != '?') {
             redisLog(REDIS_NOTICE,"Partial resynchronization not accepted: "
                 "Runid mismatch (Client asked for runid '%s', my runid is '%s',last runid is '%s')",
-                master_runid, server.runid,server.last_runid);
+                master_runid, server.runid,server.last_id);
         } else {
             redisLog(REDIS_NOTICE,"Full resync requested by slave %s",
                 replicationGetSlaveName(c));
@@ -1489,11 +1489,7 @@ int slaveTryPartialResynchronization(int fd, int read_reply) {
         /* Partial resync was accepted, set the replication state accordingly */
         redisLog(REDIS_NOTICE,
             "Successful partial resynchronization with master.");
-        /* Check the new replication ID advertised by the master. If it
-         * changed, we need to set the new ID as primary ID, and set
-         * secondary ID as the old master ID up to the current offset, so
-         * that our sub-slaves will be able to PSYNC with us after a
-         * disconnection. */
+        /* 检查主服务器通告的新复制 ID。如果它改变了，我们需要将新的ID设置为主ID，并设置 次要 ID 作为旧的主 ID 直到当前偏移量*/
         char* start = reply + 10;
         char* end = reply + 9;
         while (end[0] != '\r' && end[0] != '\n' && end[0] != '\0') end++;
@@ -1502,16 +1498,14 @@ int slaveTryPartialResynchronization(int fd, int read_reply) {
             memcpy(new, start, REDIS_RUN_ID_SIZE);
             new[REDIS_RUN_ID_SIZE] = '\0';
             //runid发生了改变
-            if (strcmp(new, server.cached_master->id)) {
+            if (strcmp(new, server.cached_master->replrunid)) {
                 redisLog(REDIS_NOTICE, "Master replication ID changed to %s", new);
-                //更新last master信息
-                memcpy(server.last_runid, server.cached_master->id,
-                    sizeof(server.last_runid));
+                //更新last master信息，也可用shiftReplicationId函数
+                memcpy(server.last_id, server.cached_master->replrunid,sizeof(server.last_id));
                 server.last_offset = server.master_repl_offset + 1;
 
                 //更新runid
-                memcpy(server.runid, new, sizeof(server.runid));
-                memcpy(server.cached_master->id, new, sizeof(server.runid));
+                memcpy(server.cached_master->replrunid, new, sizeof(server.cached_master->replrunid));
 
                 /* Disconnect all the sub-slaves: they need to be notified. */
                 disconnectSlaves();
@@ -1868,6 +1862,7 @@ void replicationUnsetMaster(void) {
     if (server.masterhost == NULL) return; /* Nothing to do. */
     sdsfree(server.masterhost);
     server.masterhost = NULL;
+    shiftReplicationId();//记录上一master的信息
     if (server.master) {
         if (listLength(server.slaves) == 0) {
             /* If this instance is turned into a master and there are no
@@ -1881,7 +1876,6 @@ void replicationUnsetMaster(void) {
     }
     replicationDiscardCachedMaster();
     cancelReplicationHandshake();
-    shiftReplicationId();//slave -> master,need shift runid
     server.repl_state = REDIS_REPL_NONE;
 }
 
@@ -2372,24 +2366,16 @@ void clearReplicationLastId(void) {
     server.last_offset = -1;
 }
 
-uint64_t getMasterRunId(void) {
-    if (server.master)
-       return server.master->id;
-    else if (server.cached_master)
-       return server.cached_master->id;
-    return 0;
-}
 
 //slave to master
 //切换角色时的修改
 void shiftReplicationId(void) {
-    uint64_t t_id = getMasterRunId();
-    memcpy(server.last_id, t_id, sizeof(t_id));
+     memcpy(server.last_id, server.cached_master->replrunid, sizeof(server.cached_master->replrunid));
     /* 从机将要求它尚未收到的第一个字节，所以我们需要在偏移量上加一*/
     server.last_offset = server.master_repl_offset + 1;
     redisLog(REDIS_WARNING,"Setting last replication ID to %s,"
-        "valid up to offset : % lld.New replication ID is % s",
-        server.last_runid, server.last_offset, t_id);
+        "valid up to offset : % lld",
+        server.last_id, server.last_offset);
 }
 
 /* --------------------------- REPLICATION CRON  ---------------------------- */
