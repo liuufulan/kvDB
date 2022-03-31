@@ -424,7 +424,8 @@ int masterTryPartialResynchronization(redisClient *c,long long psync_offset) {
      * there is no way to continue. */
     //运行id是否匹配,原master的offset是否在合法区间
     //c是master，因此直接使用runid
-    redisLog(REDIS_NOTICE, "ljy wants to see master_runid = %s,server_runid = %s,last_id = %s,psync_offset = %lld,last_offset = %lld,rel_offset = %lld,init_offset = %lld",
+    redisLog(REDIS_NOTICE, "ljy wants to see master_runid = %s,server_runid = %s,last_id = %s,"
+        "psync_offset = %lld,last_offset = %lld,rel_offset = %lld,init_offset = %lld",
         master_runid, server.runid, server.last_id,psync_offset,server.last_offset,server.master_repl_offset, server.repl_master_initial_offset);
     if (server.cached_master) {
         redisLog(REDIS_NOTICE, "ljy also wants to see cached_master_offset = %lld", server.cached_master->reploff);
