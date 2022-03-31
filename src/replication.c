@@ -424,6 +424,14 @@ int masterTryPartialResynchronization(redisClient *c,long long psync_offset) {
      * there is no way to continue. */
     //运行id是否匹配,原master的offset是否在合法区间
     //c是master，因此直接使用runid
+    redisLog(REDIS_NOTICE, "ljy wants to see master_runid = %s,server_runid = %s,last_id = %s,psync_offset = %lld,last_offset = %lld,rel_offset = %lld,init_offset = %lld",
+        master_runid, server.runid, server.last_id,psync_offset,server.last_offset,server.master_repl_offset, server.repl_master_initial_offset);
+    if (server.cached_master) {
+        redisLog(REDIS_NOTICE, "ljy also wants to see cached_master_offset = %lld", server.cached_master->reploff);
+    }
+    if (server.master) {
+        redisLog(REDIS_NOTICE, "ljy also wants to see master_offset = %lld", server.master->reploff);
+    }
     if (strcasecmp(master_runid, server.runid)&&
         (strcasecmp(master_runid, server.last_id) ||
             psync_offset > server.last_offset)) {
@@ -1288,7 +1296,9 @@ void readSyncBulkPayload(aeEventLoop *el, int fd, void *privdata, int mask) {
             }
         }
     }
-
+    server.master_repl_offset = server.master->reploff;
+    clearReplicationLastId();
+    if (server.repl_backlog == NULL) createReplicationBacklog();
     return;
 
 error:
@@ -1416,12 +1426,14 @@ int slaveTryPartialResynchronization(int fd, int read_reply) {
          * a FULL resync using the PSYNC command we'll set the offset at the
          * right value, so that this information will be propagated to the
          * client structure representing the master into server.master. */
+        redisLog(REDIS_NOTICE, "just seesee ,init_offset = %lld,cached_master->reploff = %lld", server.repl_master_initial_offset);
         server.repl_master_initial_offset = -1;
 
         if (server.cached_master) {
             psync_runid = server.cached_master->replrunid;
             snprintf(psync_offset,sizeof(psync_offset),"%lld", server.cached_master->reploff+1);
-            redisLog(REDIS_NOTICE,"Trying a partial resynchronization (request %s:%s).", psync_runid, psync_offset);
+            redisLog(REDIS_NOTICE,"Trying a partial resynchronization (request %s:%s).when master_repl_offset = %lld,init_offset = %lld,cached_master->reploff = %lld", 
+                psync_runid, psync_offset,server.master_repl_offset,server.repl_master_initial_offset, server.cached_master->reploff + 1);
         } else {
             redisLog(REDIS_NOTICE,"Partial resynchronization not possible (no cached master)");
             psync_runid = "?";
@@ -1451,7 +1463,8 @@ int slaveTryPartialResynchronization(int fd, int read_reply) {
     }
 
     aeDeleteFileEvent(server.el,fd,AE_READABLE);
-
+    redisLog(REDIS_NOTICE,
+        "Successful partial resynchronization with master.reply = %s", reply);
     if (!strncmp(reply,"+FULLRESYNC",11)) {
         char *runid = NULL, *offset = NULL;
 
@@ -1487,25 +1500,23 @@ int slaveTryPartialResynchronization(int fd, int read_reply) {
 
     if (!strncmp(reply,"+CONTINUE",9)) {
         /* Partial resync was accepted, set the replication state accordingly */
-        redisLog(REDIS_NOTICE,
-            "Successful partial resynchronization with master.");
         /* 检查主服务器通告的新复制 ID。如果它改变了，我们需要将新的ID设置为主ID，并设置 次要 ID 作为旧的主 ID 直到当前偏移量*/
         char* start = reply + 10;
         char* end = reply + 9;
         while (end[0] != '\r' && end[0] != '\n' && end[0] != '\0') end++;
         if (end - start == REDIS_RUN_ID_SIZE) {
-            char new[REDIS_RUN_ID_SIZE + 1];
-            memcpy(new, start, REDIS_RUN_ID_SIZE);
-            new[REDIS_RUN_ID_SIZE] = '\0';
+            char newID[REDIS_RUN_ID_SIZE + 1];
+            memcpy(newID, start, REDIS_RUN_ID_SIZE);
+            newID[REDIS_RUN_ID_SIZE] = '\0';
             //runid发生了改变
-            if (strcmp(new, server.cached_master->replrunid)) {
-                redisLog(REDIS_NOTICE, "Master replication ID changed to %s", new);
+            if (strcmp(newID, server.cached_master->replrunid)) {
+                redisLog(REDIS_NOTICE, "Master replication ID changed to %s", newID);
                 //更新last master信息，也可用shiftReplicationId函数
                 memcpy(server.last_id, server.cached_master->replrunid,sizeof(server.last_id));
                 server.last_offset = server.master_repl_offset + 1;
 
                 //更新runid
-                memcpy(server.cached_master->replrunid, new, sizeof(server.cached_master->replrunid));
+                memcpy(server.cached_master->replrunid, newID, sizeof(server.cached_master->replrunid));
 
                 /* Disconnect all the sub-slaves: they need to be notified. */
                 disconnectSlaves();
@@ -1843,17 +1854,19 @@ int cancelReplicationHandshake(void) {
 
 /* Set replication to the specified master address and port. */
 void replicationSetMaster(char *ip, int port) {
+    //bool was_master = server.masterhost == NULL;
+    shiftReplicationId();
     sdsfree(server.masterhost);
     server.masterhost = sdsnew(ip);
     server.masterport = port;
     if (server.master) freeClient(server.master);
     disconnectAllBlockedClients(); /* Clients blocked in master, now slave. */
     disconnectSlaves(); /* Force our slaves to resync with us as well. */
-    replicationDiscardCachedMaster(); /* Don't try a PSYNC. */
-    freeReplicationBacklog(); /* Don't allow our chained slaves to PSYNC. */
+    //replicationDiscardCachedMaster(); /* Don't try a PSYNC. */
+    //freeReplicationBacklog(); /* Don't allow our chained slaves to PSYNC. */
     cancelReplicationHandshake();
     server.repl_state = REDIS_REPL_CONNECT;
-    server.master_repl_offset = 0;
+    //server.master_repl_offset = 0;
     server.repl_down_since = 0;
 }
 
@@ -1862,20 +1875,28 @@ void replicationUnsetMaster(void) {
     if (server.masterhost == NULL) return; /* Nothing to do. */
     sdsfree(server.masterhost);
     server.masterhost = NULL;
-    shiftReplicationId();//记录上一master的信息
     if (server.master) {
-        if (listLength(server.slaves) == 0) {
-            /* If this instance is turned into a master and there are no
+        /*if (listLength(server.slaves) == 0) {
+            * If this instance is turned into a master and there are no
              * slaves, it inherits the replication offset from the master.
              * Under certain conditions this makes replicas comparable by
-             * replication offset to understand what is the most updated. */
+             * replication offset to understand what is the most updated. 
             server.master_repl_offset = server.master->reploff;
             freeReplicationBacklog();
-        }
+        }*/
+        redisLog(REDIS_NOTICE, "save master as last master,reploff = %lld",server.master->repldboff);
+        server.master_repl_offset = server.master->reploff;
         freeClient(server.master);
     }
-    replicationDiscardCachedMaster();
+    if (server.cached_master) {
+        redisLog(REDIS_NOTICE, "save cached_master as last master,reploff = %lld", server.cached_master->repldboff);
+        server.master_repl_offset = server.cached_master->reploff;
+    }
+
+    //replicationDiscardCachedMaster();
     cancelReplicationHandshake();
+    server.slaveseldb = -1;
+    shiftReplicationId();//记录上一master的信息
     server.repl_state = REDIS_REPL_NONE;
 }
 
@@ -1897,12 +1918,19 @@ void slaveofCommand(redisClient *c) {
         addReplyError(c,"SLAVEOF not allowed in cluster mode.");
         return;
     }
-
+    redisLog(REDIS_NOTICE, "at begin,ljy wants to see server_runid = %s,last_id = %s,last_offset = %lld,rel_offset = %lld,init_offset = %lld",
+        server.runid, server.last_id, server.last_offset, server.master_repl_offset, server.repl_master_initial_offset);
+    if (server.master) {
+        redisLog(REDIS_NOTICE, "at begin,ljy also wants to see master_offset = %lld", server.master->reploff);
+    }
+    if (server.cached_master) {
+        redisLog(REDIS_NOTICE, "at begin,ljy also wants to see cached_master_offset = %lld", server.cached_master->reploff);
+    }
     /* The special host/port combination "NO" "ONE" turns the instance
      * into a master. Otherwise the new master address is set. */
     if (!strcasecmp(c->argv[1]->ptr,"no") &&
         !strcasecmp(c->argv[2]->ptr,"one")) {
-        if (server.masterhost) {
+        if (server.masterhost) {//不是master
             replicationUnsetMaster();
             sds client = catClientInfoString(sdsempty(),c);
             redisLog(REDIS_NOTICE,
@@ -2370,12 +2398,15 @@ void clearReplicationLastId(void) {
 //slave to master
 //切换角色时的修改
 void shiftReplicationId(void) {
-     memcpy(server.last_id, server.cached_master->replrunid, sizeof(server.cached_master->replrunid));
+    if (server.cached_master && strncmp(server.cached_master->replrunid, "000000000", 9))
+        memcpy(server.last_id, server.cached_master->replrunid, sizeof(server.cached_master->replrunid));
+    else if (server.master)
+        memcpy(server.last_id, server.master->replrunid, sizeof(server.master->replrunid));
     /* 从机将要求它尚未收到的第一个字节，所以我们需要在偏移量上加一*/
+    redisLog(REDIS_WARNING, "Setting last replication ID to %s,"
+        "valid up from %lld to offset : % lld",
+        server.last_id, server.last_offset, server.master_repl_offset + 1);
     server.last_offset = server.master_repl_offset + 1;
-    redisLog(REDIS_WARNING,"Setting last replication ID to %s,"
-        "valid up to offset : % lld",
-        server.last_id, server.last_offset);
 }
 
 /* --------------------------- REPLICATION CRON  ---------------------------- */

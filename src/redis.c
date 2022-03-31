@@ -2714,7 +2714,7 @@ sds genRedisInfoString(char *section) {
             POSIX_ONLY("gcc_version:%d.%d.%d\r\n")
             "process_id:%ld\r\n"
             "run_id:%s\r\n"
-            "last_id:%s\r\n"
+            "last_master_run_id:%s\r\n"
             "tcp_port:%d\r\n"
             "uptime_in_seconds:%lld\r\n"                                        WIN_PORT_FIX /* %jd -> %lld */
             "uptime_in_days:%lld\r\n"                                           WIN_PORT_FIX /* %jd -> %lld */
@@ -3613,13 +3613,19 @@ int checkForSentinelMode(int argc, char **argv) {
 /* Function called at startup to load RDB or AOF file in memory. */
 void loadDataFromDisk(void) {
     PORT_LONGLONG start = ustime();
+    //BOOL isMaster = server.masterhost == NULL;
     if (server.aof_state == REDIS_AOF_ON) {
         if (loadAppendOnlyFile(server.aof_filename) == REDIS_OK)
             redisLog(REDIS_NOTICE,"DB loaded from append only file: %.3f seconds",(float)(ustime()-start)/1000000);
     } else {
+        //if (isMaster) createReplicationBacklog();
         if (rdbLoad(server.rdb_filename) == REDIS_OK) {
             redisLog(REDIS_NOTICE,"DB loaded from disk: %.3f seconds",
                 (float)(ustime()-start)/1000000);
+            if (server.master)
+                server.master_repl_offset = server.master->reploff;
+            else if (server.cached_master)
+                server.master_repl_offset = server.cached_master->reploff;
         } else if (errno != ENOENT) {
             redisLog(REDIS_WARNING,"Fatal error loading the DB: %s. Exiting.",strerror(errno));
             exit(1);
