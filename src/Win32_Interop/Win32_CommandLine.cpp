@@ -214,9 +214,9 @@ public:
         vector<string> params;
         int argIndex = argStartIndex + 1;
 
-        // save [seconds] [changes]
+        // reject [seconds] [changes]
         // or 
-        // save ""      -- turns off RDB persistence
+        // reject ""
         if (strcmp(argv[argIndex], "\"\"") == 0 || strcmp(argv[argIndex], "''") == 0 || strcmp(argv[argIndex], "") == 0) {
             params.push_back(argv[argIndex]);
         }

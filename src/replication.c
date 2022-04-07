@@ -2141,7 +2141,6 @@ void refreshGoodSlavesCount(void) {
     listIter li;
     listNode *ln;
     int good = 0;
-    int sum = 0;
 
     if (!server.repl_min_slaves_to_write ||
         !server.repl_min_slaves_max_lag) return;
@@ -2150,7 +2149,6 @@ void refreshGoodSlavesCount(void) {
     while((ln = listNext(&li))) {
         redisClient *slave = ln->value;
         time_t lag = server.unixtime - slave->repl_ack_time;
-        sum++;
         if (slave->replstate == REDIS_REPL_ONLINE &&
             lag <= server.repl_min_slaves_max_lag) good++;
     }
