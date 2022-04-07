@@ -1394,6 +1394,8 @@ void createSharedObjects(void) {
         "-EXECABORT Transaction discarded because of previous errors.\r\n"));
     shared.noreplicaserr = createObject(REDIS_STRING,sdsnew(
         "-NOREPLICAS Not enough good slaves to write.\r\n"));
+    shared.offlineslaveserr = createObject(REDIS_STRING, sdsnew(
+        "-OFFLINESLAVES Too much offline slaves in few seconds.\r\n"));
     shared.busykeyerr = createObject(REDIS_STRING,sdsnew(
         "-BUSYKEY Target key name already exists.\r\n"));
     shared.space = createObject(REDIS_STRING,sdsnew(" "));
@@ -1463,6 +1465,9 @@ void initServerConfig(void) {
     server.active_expire_enabled = 1;
     server.client_max_querybuf_len = REDIS_MAX_QUERYBUF_LEN;
     server.saveparams = NULL;
+    server.rejectparams = NULL;
+    server.offline_slaves = NULL;
+    server.offline_number = 0;
     server.loading = 0;
     server.logfile = zstrdup(REDIS_DEFAULT_LOGFILE);
     server.syslog_enabled = REDIS_DEFAULT_SYSLOG_ENABLED;
@@ -1895,6 +1900,7 @@ void initServer(void) {
     server.aof_last_write_status = REDIS_OK;
     server.aof_last_write_errno = 0;
     server.repl_good_slaves_count = 0;
+    server.offline_number = 0;
     updateCachedTime();
 
     /* Create the serverCron() time event, that's our main way to process
@@ -2302,6 +2308,28 @@ int processCommand(redisClient *c) {
         addReply(c, shared.noreplicaserr);
         return REDIS_OK;
     }
+
+    /*reject writing for offline slaves*/
+    if (server.masterhost == NULL &&
+        server.offline_number &&
+        server.rejectparams && server.rejectparamslen &&
+        c->cmd->flags & REDIS_CMD_WRITE )
+    {
+        for (int i = 0; i < server.rejectparamslen; i++) {
+            struct rejectparam * sp = server.rejectparams + i;
+            int num = server.offline_number;
+            if (num < sp->changes) {
+                continue;
+            }
+            mstime_t interval = mstime() - (server.offline_slaves + (num - sp->changes))->offline_time;//ms
+            if (interval <= 1000 * sp->seconds) {
+                flagTransaction(c);
+                addReply(c, shared.offlineslaveserr);
+                return REDIS_OK;
+            }
+        }
+    }
+
 
     /* Don't accept write commands if this is a read only slave. But
      * accept write commands if this is our master. */

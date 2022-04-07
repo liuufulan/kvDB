@@ -181,7 +181,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
 
     /* We can't have slaves attached and no backlog. */
     redisAssert(!(listLength(slaves) != 0 && server.repl_backlog == NULL));
-
+    //Í¬²½selectÃüÁî
     /* Send SELECT command to every slave if needed. */
     if (server.slaveseldb != dictid) {
         robj *selectcmd;
@@ -2141,6 +2141,7 @@ void refreshGoodSlavesCount(void) {
     listIter li;
     listNode *ln;
     int good = 0;
+    int sum = 0;
 
     if (!server.repl_min_slaves_to_write ||
         !server.repl_min_slaves_max_lag) return;
@@ -2149,11 +2150,13 @@ void refreshGoodSlavesCount(void) {
     while((ln = listNext(&li))) {
         redisClient *slave = ln->value;
         time_t lag = server.unixtime - slave->repl_ack_time;
-
+        sum++;
         if (slave->replstate == REDIS_REPL_ONLINE &&
             lag <= server.repl_min_slaves_max_lag) good++;
     }
     server.repl_good_slaves_count = good;
+    redisLog(REDIS_NOTICE, "Count number of slaves:good_slaves_count = %d,offline_slaves_count = %d",
+        server.repl_good_slaves_count,server.offline_number);
 }
 
 /* ----------------------- REPLICATION SCRIPT CACHE --------------------------
@@ -2582,4 +2585,10 @@ void replicationCron(void) {
     /* Refresh the number of slaves with lag <= min-slaves-max-lag. */
     refreshGoodSlavesCount();
     replication_cron_loops++; /* Incremented with frequency 1 HZ. */
+}
+
+void addOfflineSlaves(void) {
+    server.offline_slaves = zrealloc(server.offline_slaves, sizeof(struct saveparam) * (server.offline_number + 1));
+    server.offline_slaves[server.offline_number].offline_time = mstime();
+    server.offline_number++;
 }
