@@ -81,12 +81,24 @@ void appendServerSaveParams(time_t seconds, int changes) {
     server.saveparamslen++;
 }
 
+void appendServerRejectParams(time_t seconds, int changes) {
+    server.rejectparams = zrealloc(server.rejectparams, sizeof(struct rejectparam) * (server.rejectparamslen + 1));
+    server.rejectparams[server.rejectparamslen].seconds = seconds;
+    server.rejectparams[server.rejectparamslen].changes = changes;
+    server.rejectparamslen++;
+}
+
 void resetServerSaveParams(void) {
     zfree(server.saveparams);
     server.saveparams = NULL;
     server.saveparamslen = 0;
 }
 
+void resetServerRejectParams(void) {
+    zfree(server.rejectparams);
+    server.rejectparams = NULL;
+    server.rejectparamslen = 0;
+}
 void loadServerConfigFromString(char *config) {
     char *err = NULL;
     int linenum = 0, totlines, i;
@@ -564,6 +576,17 @@ void loadServerConfigFromString(char *config) {
             if (server.repl_min_slaves_max_lag < 0) {
                 err = "Invalid value for min-slaves-max-lag."; goto loaderr;
             }
+        } else if (!strcasecmp(argv[0],"reject")) {
+            if (argc == 3) {
+                int seconds = atoi(argv[1]);
+                int changes = atoi(argv[2]);
+                if (seconds < 1 || changes < 0) {
+                    err = "Invalid reject parameters"; goto loaderr;
+                }
+                appendServerRejectParams(seconds,changes);
+            } else if (argc == 2 && !strcasecmp(argv[1],"")) {
+                resetServerRejectParams();
+            }
         } else if (!strcasecmp(argv[0],"notify-keyspace-events") && argc == 2) {
             int flags = keyspaceEventsStringToFlags(argv[1]);
 
@@ -829,7 +852,41 @@ void configSetCommand(redisClient *c) {
 
         if (yn == -1) goto badfmt;
         server.aof_load_truncated = yn;
-    } else if (!strcasecmp(c->argv[2]->ptr,"save")) {
+    } else if (!strcasecmp(c->argv[2]->ptr, "reject")) {
+        int vlen, j;
+        sds* v = sdssplitlen(o->ptr, (int)sdslen(o->ptr), " ", 1, &vlen);           WIN_PORT_FIX /* cast (int) */
+
+        /* Perform sanity check before setting the new config:
+         * - Even number of args
+         * - Seconds >= 1, changes >= 0 */
+            if (vlen & 1) {
+                sdsfreesplitres(v, vlen);
+                goto badfmt;
+            }
+        for (j = 0; j < vlen; j++) {
+            char* eptr;
+            PORT_LONG val;
+
+            val = (PORT_LONG)strtoll(v[j], &eptr, 10);                         WIN_PORT_FIX /* cast (PORT_LONG) */
+                if (eptr[0] != '\0' ||
+                    ((j & 1) == 0 && val < 1) ||
+                    ((j & 1) == 1 && val < 0)) {
+                    sdsfreesplitres(v, vlen);
+                    goto badfmt;
+                }
+        }
+        /* Finally set the new config */
+        resetServerRejectParams();
+        for (j = 0; j < vlen; j += 2) {
+            time_t seconds;
+            int changes;
+
+            seconds = strtoll(v[j], NULL, 10);
+            changes = (int)strtoll(v[j + 1], NULL, 10);                             WIN_PORT_FIX /* cast (int) */
+                appendServerRejectParams(seconds, changes);
+        }
+        sdsfreesplitres(v, vlen);
+    }else if (!strcasecmp(c->argv[2]->ptr,"save")) {
         int vlen, j;
         sds *v = sdssplitlen(o->ptr,(int)sdslen(o->ptr)," ",1,&vlen);           WIN_PORT_FIX /* cast (int) */
 
@@ -1258,6 +1315,22 @@ void configGetCommand(redisClient *c) {
         sdsfree(buf);
         matches++;
     }
+    if (stringmatch(pattern, "reject", 0)) {
+        sds buf = sdsempty();
+        int j;
+
+        for (j = 0; j < server.rejectparamslen; j++) {
+            buf = sdscatprintf(buf, "%jd %d",
+                (intmax_t)server.rejectparams[j].seconds,
+                server.rejectparams[j].changes);
+            if (j != server.rejectparamslen - 1)
+                buf = sdscatlen(buf, " ", 1);
+        }
+        addReplyBulkCString(c, "reject");
+        addReplyBulkCString(c, buf);
+        sdsfree(buf);
+        matches++;
+    }
     if (stringmatch(pattern,"loglevel",0)) {
         char *s;
 
@@ -1635,7 +1708,18 @@ void rewriteConfigSyslogfacilityOption(struct rewriteConfigState *state) {
     rewriteConfigRewriteLine(state,option,line,force);
 }
 #endif
+/* Rewrite the reject writing option. */
+void rewriteConfigRejectOption(struct rewriteConfigState* state) {
+    int j;
+    sds line;
 
+    for (j = 0; j < server.rejectparamslen; j++) {
+        line = sdscatprintf(sdsempty(), "reject %ld %d",
+            (PORT_LONG)server.rejectparams[j].seconds, server.rejectparams[j].changes);
+        rewriteConfigRewriteLine(state, "reject", line, 1);
+    }
+    rewriteConfigMarkAsProcessed(state, "reject");
+}
 /* Rewrite the save option. */
 void rewriteConfigSaveOption(struct rewriteConfigState *state) {
     int j;
@@ -1905,6 +1989,7 @@ int rewriteConfig(char *path) {
     rewriteConfigSyslogfacilityOption(state);
 #endif
     rewriteConfigSaveOption(state);
+    rewriteConfigRejectOption(state);
     rewriteConfigNumericalOption(state,"databases",server.dbnum,REDIS_DEFAULT_DBNUM);
     rewriteConfigYesNoOption(state,"stop-writes-on-bgsave-error",server.stop_writes_on_bgsave_err,REDIS_DEFAULT_STOP_WRITES_ON_BGSAVE_ERROR);
     rewriteConfigYesNoOption(state,"rdbcompression",server.rdb_compression,REDIS_DEFAULT_RDB_COMPRESSION);

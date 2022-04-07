@@ -593,13 +593,20 @@ struct saveparam {
     time_t seconds;
     int changes;
 };
+struct rejectparam {
+    time_t seconds;
+    int changes;
+};
+struct offlineslave {
+    mstime_t offline_time;
+};
 
 struct sharedObjectsStruct {
     robj *crlf, *ok, *err, *emptybulk, *czero, *cone, *cnegone, *pong, *space,
     *colon, *nullbulk, *nullmultibulk, *queued,
     *emptymultibulk, *wrongtypeerr, *nokeyerr, *syntaxerr, *sameobjecterr,
     *outofrangeerr, *noscripterr, *loadingerr, *slowscripterr, *bgsaveerr,
-    *masterdownerr, *roslaveerr, *execaborterr, *noautherr, *noreplicaserr,
+    *masterdownerr, *roslaveerr, *execaborterr, *noautherr, *noreplicaserr,* offlineslaveserr,
     *busykeyerr, *oomerr, *plus, *messagebulk, *pmessagebulk, *subscribebulk,
     *unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *rpop, *lpop,
     *lpush, *emptyscan, *minstring, *maxstring,
@@ -841,6 +848,10 @@ struct redisServer {
     int repl_min_slaves_to_write;   /* Min number of slaves to write. */
     int repl_min_slaves_max_lag;    /* Max lag of <count> slaves to write. */
     int repl_good_slaves_count;     /* Number of slaves with lag <= max_lag. */
+    struct rejectparam* rejectparams;
+    int rejectparamslen;
+    struct offlineslave* offline_slaves;
+    int offline_number;
     int repl_diskless_sync;         /* Send RDB to slaves sockets directly. */
     int repl_diskless_sync_delay;   /* Delay to start a diskless repl BGSAVE. */
     /* Replication (slave) */
@@ -1193,6 +1204,7 @@ void resizeReplicationBacklog(PORT_LONGLONG newsize);
 void replicationSetMaster(char *ip, int port);
 void replicationUnsetMaster(void);
 void refreshGoodSlavesCount(void);
+void addOfflineSlaves(void);
 void replicationScriptCacheInit(void);
 void replicationScriptCacheFlush(void);
 void replicationScriptCacheAdd(sds sha1);
@@ -1338,6 +1350,8 @@ sds keyspaceEventsFlagsToString(int flags);
 void loadServerConfig(char *filename, char *options);
 void appendServerSaveParams(time_t seconds, int changes);
 void resetServerSaveParams(void);
+void resetServerRejectParams(void);
+void appendServerRejectParams(time_t seconds, int changes);
 struct rewriteConfigState; /* Forward declaration to export API. */
 void rewriteConfigRewriteLine(struct rewriteConfigState *state, char *option, sds line, int force);
 int rewriteConfig(char *path);

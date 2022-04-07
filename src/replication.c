@@ -181,7 +181,7 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
 
     /* We can't have slaves attached and no backlog. */
     redisAssert(!(listLength(slaves) != 0 && server.repl_backlog == NULL));
-
+    //同步select命令
     /* Send SELECT command to every slave if needed. */
     if (server.slaveseldb != dictid) {
         robj *selectcmd;
@@ -424,7 +424,8 @@ int masterTryPartialResynchronization(redisClient *c,long long psync_offset) {
      * there is no way to continue. */
     //运行id是否匹配,原master的offset是否在合法区间
     //c是master，因此直接使用runid
-    redisLog(REDIS_NOTICE, "ljy wants to see master_runid = %s,server_runid = %s,last_id = %s,psync_offset = %lld,last_offset = %lld,rel_offset = %lld,init_offset = %lld",
+    redisLog(REDIS_NOTICE, "ljy wants to see master_runid = %s,server_runid = %s,last_id = %s,"
+        "psync_offset = %lld,last_offset = %lld,rel_offset = %lld,init_offset = %lld",
         master_runid, server.runid, server.last_id,psync_offset,server.last_offset,server.master_repl_offset, server.repl_master_initial_offset);
     if (server.cached_master) {
         redisLog(REDIS_NOTICE, "ljy also wants to see cached_master_offset = %lld", server.cached_master->reploff);
@@ -2148,11 +2149,12 @@ void refreshGoodSlavesCount(void) {
     while((ln = listNext(&li))) {
         redisClient *slave = ln->value;
         time_t lag = server.unixtime - slave->repl_ack_time;
-
         if (slave->replstate == REDIS_REPL_ONLINE &&
             lag <= server.repl_min_slaves_max_lag) good++;
     }
     server.repl_good_slaves_count = good;
+    redisLog(REDIS_NOTICE, "Count number of slaves:good_slaves_count = %d,offline_slaves_count = %d",
+        server.repl_good_slaves_count,server.offline_number);
 }
 
 /* ----------------------- REPLICATION SCRIPT CACHE --------------------------
@@ -2581,4 +2583,10 @@ void replicationCron(void) {
     /* Refresh the number of slaves with lag <= min-slaves-max-lag. */
     refreshGoodSlavesCount();
     replication_cron_loops++; /* Incremented with frequency 1 HZ. */
+}
+
+void addOfflineSlaves(void) {
+    server.offline_slaves = zrealloc(server.offline_slaves, sizeof(struct saveparam) * (server.offline_number + 1));
+    server.offline_slaves[server.offline_number].offline_time = mstime();
+    server.offline_number++;
 }

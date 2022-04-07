@@ -192,6 +192,74 @@ public:
 
 static SaveParams savep = SaveParams();
 
+typedef class RejectParams : public ParamExtractor {
+public:
+    RejectParams() {}
+
+    bool isStringAnInt(string test) {
+        int x;
+        char c;
+        istringstream s(test);
+
+        if (!(s >> x) ||            // not convertable to an int
+            (s >> c)) {             // some character past the int
+            return false;
+        }
+        else {
+            return true;
+        }
+    }
+
+    vector<string> Extract(int argStartIndex, int argc, char** argv) {
+        vector<string> params;
+        int argIndex = argStartIndex + 1;
+
+        // reject [seconds] [changes]
+        // or 
+        // reject ""
+        if (strcmp(argv[argIndex], "\"\"") == 0 || strcmp(argv[argIndex], "''") == 0 || strcmp(argv[argIndex], "") == 0) {
+            params.push_back(argv[argIndex]);
+        }
+        else if (
+            isStringAnInt(argv[argIndex]) &&
+            isStringAnInt(argv[argIndex + 1])) {
+            params.push_back(argv[argIndex]);
+            params.push_back(argv[argIndex + 1]);
+        }
+        else {
+            stringstream err;
+            err << "Not enough parameters available for " << argv[argStartIndex];
+            throw invalid_argument(err.str());
+        }
+        return params;
+    }
+
+    virtual vector<string> Extract(vector<string> tokens, int startIndex = 0) {
+        vector<string> params;
+        unsigned int parameterIndex = 1 + startIndex;
+        if ((tokens.size() > parameterIndex) &&
+            (tokens.at(parameterIndex) == string("\"\"") ||
+                tokens.at(parameterIndex) == string("''"))) {
+            params.push_back(tokens.at(parameterIndex));
+        }
+        else if ((tokens.size() > parameterIndex + 1) &&
+            isStringAnInt(tokens.at(parameterIndex)) &&
+            isStringAnInt(tokens.at(parameterIndex + 1))) {
+            params.push_back(tokens.at(parameterIndex));
+            params.push_back(tokens.at(parameterIndex + 1));
+        }
+        else {
+            stringstream err;
+            err << "Not enough parameters available for " << tokens.at(startIndex);
+            throw invalid_argument(err.str());
+        }
+        return params;
+    };
+
+} RejectParams;
+
+static RejectParams rejectp = RejectParams();
+
 typedef class BindParams : public ParamExtractor {
 public:
     BindParams() {}
@@ -378,6 +446,7 @@ static RedisParamterMapper g_redisArgMap =
     { "syslog-facility",                &fp1 },    // syslog-facility [string]
     { "databases",                      &fp1 },    // databases [number]
     { "save",                           &savep },  // save [seconds] [changes] or save ""
+    { "reject",                         &rejectp },// reject [seconds] [changes] or save ""
     { "stop-writes-on-bgsave-error",    &fp1 },    // stop-writes-on-bgsave-error [yes/no] 
     { "rdbcompression",                 &fp1 },    // rdbcompression [yes/no]
     { "rdbchecksum",                    &fp1 },    // rdbchecksum [yes/no]
